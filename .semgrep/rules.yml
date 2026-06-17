@@ -1,0 +1,47 @@
+rules:
+  # Enforce the idempotency pillar: DAG task logic must use the Airflow
+  # execution-date macro (passed in as `as_of`), never wall-clock time.
+  - id: no-wallclock-time-in-dags
+    languages: [python]
+    severity: ERROR
+    message: >
+      Wall-clock time in DAG logic breaks idempotency and backfills. Use the
+      Airflow execution-date macro ({{ data_interval_end }} / {{ ds }}) passed
+      as `as_of` instead of datetime.now()/today()/Timestamp.now()/time.time().
+    paths:
+      include: ["dags/"]
+    patterns:
+      - pattern-either:
+          - pattern: datetime.now(...)
+          - pattern: datetime.today(...)
+          - pattern: pd.Timestamp.now(...)
+          - pattern: pd.Timestamp.utcnow(...)
+          - pattern: time.time(...)
+
+  # MLSecOps guardrail: unsafe deserialization can execute arbitrary code.
+  # Models must be loaded via the integrity-checked path only.
+  - id: no-unsafe-deserialization
+    languages: [python]
+    severity: ERROR
+    message: >
+      Unsafe deserialization (pickle/joblib.load) can execute arbitrary code on
+      load. Load model artifacts only via src/inference/model_integrity.
+    paths:
+      include: ["src/"]
+      exclude: ["src/inference/model_integrity.py"]
+    patterns:
+      - pattern-either:
+          - pattern: pickle.load(...)
+          - pattern: pickle.loads(...)
+          - pattern: joblib.load(...)
+
+  # Architectural boundary: the data layer must not import the serving API
+  # (prevents circular / inverted dependencies).
+  - id: data-layer-must-not-import-serving
+    languages: [python]
+    severity: ERROR
+    message: "The src/data layer must not depend on the serving layer."
+    paths:
+      include: ["src/data/"]
+    patterns:
+      - pattern: import src.serving

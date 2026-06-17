@@ -1,0 +1,285 @@
+name: MLOps Pipeline
+
+# GitHub Actions. The docker-build job pushes to GitHub Container Registry
+# (ghcr.io/<owner>/...) using the built-in GITHUB_TOKEN. Image signing is
+# skipped until you add COSIGN_PRIVATE_KEY / COSIGN_PASSWORD repo secrets.
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+# Restrict default GITHUB_TOKEN to read-only — jobs that need more declare it explicitly
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: '3.11'
+  MOCK_DATABASE: 'True'
+
+jobs:
+  # ── Job 1: Lint ────────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install linting tools
+        run: pip install flake8
+
+      - name: Lint source code
+        # Configuration lives in .flake8 so local and CI behave identically.
+        run: flake8 src/ tests/
+
+  # ── Job 1b: Automated code review (security + architecture) ───
+  code-review:
+    name: Code Review (Bandit, Semgrep, radon)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install review tools
+        run: pip install bandit semgrep radon
+
+      - name: Bandit — security scan (medium+ severity gates the build)
+        run: bandit -r src dags -ll
+
+      - name: Semgrep — architecture rules (gating)
+        run: semgrep --error --config .semgrep/ src dags
+
+      - name: Semgrep — security rulesets (report, non-gating)
+        run: semgrep --config p/python --config p/security-audit src dags || true
+
+      - name: Radon — cyclomatic complexity (report)
+        run: radon cc src dags -s -a
+
+  # ── Job 2: Unit & Integration Tests ───────────────────────────
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt pytest-cov
+          pip install -e . --no-deps
+
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ testing/ \
+            --ignore=tests/test_dags.py \
+            --cov=src \
+            --cov-report=term-missing \
+            --cov-fail-under=70 \
+            -v
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: .coverage
+
+  # ── Job 3: Data Quality Gate ───────────────────────────────────
+  data-quality:
+    name: Data Quality Gate
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Validate schema & feature engineering
+        run: |
+          python - <<'EOF'
+          import sys, os, pandas as pd, numpy as np
+          sys.path.insert(0, '.')
+
+          # Synthetic data mimicking the TLC trip records
+          from src.features.feature_engineer import QuantFeatureEngineer
+          from src.inference.validation import validate_input_data
+
+          dates = pd.date_range('2024-01-01', periods=60, freq='D')
+          daily_df = pd.DataFrame({'TimePeriod': dates, 'Volume': np.random.randint(50, 300, 60).astype(float)})
+
+          # Validation gate
+          validate_input_data(daily_df)
+          print("[OK] Schema validation passed")
+
+          # Feature engineering
+          fe = QuantFeatureEngineer(daily_df, 'D')
+          result = fe.engineer_features()
+          required = ['Volume_Lag1','Volume_LagDelta1','Volume_Lag7','Volume_LagDelta7',
+                      'Sin_DayOfWeek','Cos_DayOfWeek','Sin_WeekOfYear','Cos_WeekOfYear',
+                      'Regime_0','Regime_1','Regime_2']
+          missing = [c for c in required if c not in result.columns]
+          if missing:
+              print(f"[FAIL] Missing features: {missing}")
+              sys.exit(1)
+          if result.isnull().values.any():
+              print("[FAIL] NaN values found after feature engineering")
+              sys.exit(1)
+          print(f"[OK] All {len(required)} production features present, no NaNs")
+
+          # LagDelta correctness (notebook contract)
+          expected_delta1 = result['Volume'] - result['Volume_Lag1']
+          if not (result['Volume_LagDelta1'].round(6) == expected_delta1.round(6)).all():
+              print("[FAIL] LagDelta1 does not match Volume - Lag1")
+              sys.exit(1)
+          print("[OK] LagDelta calculation matches notebook contract")
+          EOF
+
+  # ── Job 4: Model Training Smoke Test ──────────────────────────
+  model-smoke-test:
+    name: Model Training Smoke Test
+    runs-on: ubuntu-latest
+    needs: data-quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Train models on synthetic data
+        run: |
+          python - <<'EOF'
+          import sys, os, pandas as pd, numpy as np
+          from unittest.mock import patch, MagicMock
+          sys.path.insert(0, '.')
+
+          dates_d = pd.date_range('2024-01-01', periods=60, freq='D')
+          dates_h = pd.date_range('2024-01-01', periods=240, freq='h')
+          df_daily  = pd.DataFrame({'TimePeriod': dates_d, 'Volume': np.random.randint(50,300,60).astype(float)})
+          df_hourly = pd.DataFrame({'TimePeriod': dates_h, 'Volume': np.random.randint(0,50,240).astype(float)})
+
+          with patch('src.training.train_lgbm.mlflow.set_tracking_uri'), \
+               patch('src.training.train_lgbm.mlflow.set_experiment'), \
+               patch('src.training.train_lgbm.mlflow.start_run') as mr, \
+               patch('src.training.train_lgbm.mlflow.lightgbm.autolog'), \
+               patch('src.training.train_lgbm.mlflow.set_tag'), \
+               patch('src.training.train_lgbm.mlflow.log_metric'), \
+               patch('src.training.train_lgbm.mlflow.lightgbm.log_model'):
+            mr.return_value.__enter__ = MagicMock(return_value=MagicMock())
+            mr.return_value.__exit__ = MagicMock(return_value=False)
+            from src.training.train_lgbm import train_daily_model, train_hourly_model
+            train_daily_model(df_daily)
+            train_hourly_model(df_hourly)
+
+          print("[OK] Both daily and hourly models trained successfully on synthetic data")
+          EOF
+
+  # ── Job 5: Supply Chain — SCA + SBOM / AI-BOM ─────────────────
+  supply-chain:
+    name: Supply Chain (SCA + SBOM)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install audit tooling
+        run: pip install pip-audit cyclonedx-bom
+
+      - name: Dependency vulnerability scan (SCA)
+        run: pip-audit -r requirements.txt    # fails the build on known CVEs
+
+      - name: Generate SBOM / AI-BOM (CycloneDX)
+        run: cyclonedx-py requirements requirements.txt -o sbom.json
+
+      - name: Upload SBOM / AI-BOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-aibom
+          path: sbom.json
+
+  # ── Job 6: Docker Build, Scan, Sign (GHCR) ──────────
+  docker-build:
+    name: Docker Build, Scan, Sign
+    runs-on: ubuntu-latest
+    needs: [model-smoke-test, supply-chain]
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write       # push to GitHub Container Registry
+    strategy:
+      matrix:
+        component: [inference, serving]   # build both images
+    env:
+      # GitHub Container Registry. Override with a repo Variable named REGISTRY.
+      REGISTRY: ${{ vars.REGISTRY != '' && vars.REGISTRY || 'ghcr.io' }}
+      # Cosign signing (key-based). Optional — signing is
+      # skipped until these repo Secrets exist (`cosign generate-key-pair`).
+      COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+      COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image ref (registry path must be lowercase)
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE=$REGISTRY/$OWNER/demand-forecast-${{ matrix.component }}" >> "$GITHUB_ENV"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}   # GitHub Actions token
+
+      - name: Build ${{ matrix.component }} image
+        run: docker build -t "$IMAGE:${{ github.sha }}" -f docker/${{ matrix.component }}/Dockerfile .
+
+      - name: Scan image for vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ github.sha }}
+          format: table
+          exit-code: '1'           # Fail the build on CRITICAL CVEs
+          severity: 'CRITICAL'
+          ignore-unfixed: true
+
+      - name: Push image
+        run: docker push "$IMAGE:${{ github.sha }}"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image (cosign, key-based) — supply-chain crypto verification
+        if: env.COSIGN_PRIVATE_KEY != ''
+        run: cosign sign --yes --key env://COSIGN_PRIVATE_KEY "$IMAGE:${{ github.sha }}"

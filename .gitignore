@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets & credentials — never commit these
+config.local.yaml
+.env
+*.pem
+*.key
+credentials.json
+
+# Raw trip data is large — fetched via scripts/download_data.py, not committed.
+# The small aggregated demand CSVs (data/*_demand.csv) ARE committed so the repo
+# runs out of the box.
+data/raw/
+data/shadow_log/
+data/drift_reports/
+data/reference/
+data/features/
+
+# ML artifacts
+*.joblib
+*.pkl
+mlruns/
+data/*.db
+feature_repo/data/
+
+# Notebooks checkpoints
+.ipynb_checkpoints/
+Notebook/.ipynb_checkpoints/
+
+# Coverage
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.swp

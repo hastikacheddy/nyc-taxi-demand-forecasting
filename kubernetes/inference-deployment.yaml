@@ -1,0 +1,97 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lgbm-hourly-inference
+  namespace: mlops
+spec:
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 300
+      template:
+        spec:
+          # Pod-level: no root, no privilege escalation
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+
+          # Never auto-mount the service account token (not needed for inference)
+          automountServiceAccountToken: false
+
+          containers:
+          - name: inference-container
+            image: ghcr.io/your-username/demand-forecast-inference:latest
+            command: ["python", "-m", "src.inference.engine"]
+            resources:
+              requests:
+                memory: "512Mi"
+                cpu: "500m"
+              limits:
+                memory: "1Gi"
+                cpu: "1000m"
+
+            # Container-level: lock down further
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: ["ALL"]
+
+            # Inject secrets from Kubernetes Secrets — never hardcode these
+            env:
+            - name: CRM_DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: mlops-db-secrets
+                  key: crm_db_host
+            - name: CRM_DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: mlops-db-secrets
+                  key: crm_db_name
+            - name: CRM_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mlops-db-secrets
+                  key: crm_db_user
+            - name: CRM_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mlops-db-secrets
+                  key: crm_db_password
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mlops-api-secrets
+                  key: api_key
+
+            # MLflow tracking server (Postgres-backed registry). Overrides the
+            # local sqlite default in config.yaml via resolve_tracking_uri().
+            - name: MLFLOW_TRACKING_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: mlflow_tracking_uri
+            # MinIO (S3-compatible) artifact store for model artifacts.
+            - name: MLFLOW_S3_ENDPOINT_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: minio_endpoint
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: mlops-minio-secrets
+                  key: access_key_id
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mlops-minio-secrets
+                  key: secret_access_key
+
+          restartPolicy: Never

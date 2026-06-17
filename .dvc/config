@@ -1,0 +1,5 @@
+[core]
+    remote = minio
+['remote "minio"']
+    url = s3://mlops-dvc-bucket/taxi-demand
+    endpointurl = http://minio:9000

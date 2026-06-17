@@ -1,0 +1,154 @@
+# Forecast serving API — long-running Deployment + Service + autoscaler.
+# Mirrors the inference CronJob's pod least-privilege baseline (the OPA policy
+# in opa-policy.rego enforces it). Set the image to your registry path.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demand-forecast-serving
+  namespace: mlops
+  labels:
+    app: demand-forecast-serving
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: demand-forecast-serving
+  template:
+    metadata:
+      labels:
+        app: demand-forecast-serving
+      annotations:
+        # Prometheus scrapes the /metrics endpoint exposed by the API.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Pod-level: no root, no privilege escalation.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      automountServiceAccountToken: false
+
+      containers:
+        - name: serving
+          # Built/pushed by CI; pin to a :<sha> tag in production.
+          image: ghcr.io/your-username/demand-forecast-serving:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+
+          # Container-level: lock down further.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          env:
+            - name: ENV
+              value: "production"          # disables OpenAPI docs
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mlops-api-secrets
+                  key: api_key
+            - name: MLFLOW_TRACKING_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: mlflow_tracking_uri
+            - name: MLFLOW_S3_ENDPOINT_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: mlops-config
+                  key: minio_endpoint
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: mlops-minio-secrets
+                  key: access_key_id
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mlops-minio-secrets
+                  key: secret_access_key
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            failureThreshold: 3
+
+          volumeMounts:
+            # readOnlyRootFilesystem needs a writable tmp for joblib/MLflow.
+            - name: tmp
+              mountPath: /tmp
+            # Cleaned aggregates the API reads for recent history (read-only).
+            - name: data
+              mountPath: /opt/app/data
+              readOnly: true
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: data
+          persistentVolumeClaim:
+            claimName: mlops-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demand-forecast-serving
+  namespace: mlops
+  labels:
+    app: demand-forecast-serving
+spec:
+  type: ClusterIP
+  selector:
+    app: demand-forecast-serving
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: demand-forecast-serving
+  namespace: mlops
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: demand-forecast-serving
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

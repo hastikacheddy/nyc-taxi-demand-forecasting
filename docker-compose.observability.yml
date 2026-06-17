@@ -1,0 +1,45 @@
+# Local observability stack: statsd-exporter + Prometheus + Grafana.
+#
+#   1. Bring up Airflow first (it emits statsd to statsd-exporter and shares
+#      the network):  docker compose -f docker-compose.airflow.yml up -d
+#   2. docker compose -f docker-compose.observability.yml up -d
+#   3. Grafana:   http://localhost:3000   (admin / admin)  -> dashboard
+#      "MLOps — NYC Taxi Demand Forecasting" is auto-provisioned.
+#      Prometheus: http://localhost:9090
+services:
+  statsd-exporter:
+    image: prom/statsd-exporter:v0.27.1
+    command:
+      - "--statsd.mapping-config=/etc/statsd/mapping.yml"
+      - "--statsd.listen-udp=:9125"
+      - "--web.listen-address=:9102"
+    volumes:
+      - ./observability/statsd_mapping.yml:/etc/statsd/mapping.yml:ro
+    ports:
+      - "9102:9102"
+      - "9125:9125/udp"
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/etc/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+
+# Join the network the Airflow stack creates, so Prometheus can scrape it.
+networks:
+  default:
+    name: operationaloptimization_default
+    external: true

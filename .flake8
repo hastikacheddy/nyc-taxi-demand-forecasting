@@ -1,0 +1,13 @@
+[flake8]
+max-line-length = 120
+# Substantive checks stay on (F-codes: unused imports/vars/undefined names;
+# E501 line length; E7xx statement errors). The ignored codes are purely
+# stylistic and reflect intentional conventions in this codebase:
+#   E402 - test bootstrap (e.g. test_dag_integrity sets env before importing
+#          Airflow); source code no longer needs it (project is now installable)
+#   E221/E222/E241/E251/E272 - aligned-assignment / aligned-kwarg style
+#   E302/E303/E305 - blank-line spacing
+#   W291/W293 - trailing / blank-line whitespace
+#   E203/W503 - black-compatible operator spacing
+extend-ignore = E203,W503,E402,E221,E222,E241,E251,E261,E272,E302,E303,E305,W291,W293
+exclude = __pycache__,.git,Notebook,.venv,build,dist

@@ -1,0 +1,69 @@
+mlflow:
+  tracking_uri: "sqlite:///data/mlflow.db"
+  experiment_name: "NYC_Taxi_Demand_Forecasting"
+  daily_model_name: "TaxiDemand_Daily"
+  hourly_model_name: "TaxiDemand_Hourly"
+  daily_forecast_model_name: "TaxiDemand_Daily_Forecast"
+  hourly_forecast_model_name: "TaxiDemand_Hourly_Forecast"
+
+data:
+  dvc_remote: "s3://mlops-dvc-bucket/taxi-demand"
+
+training:
+  # LightGBM hyperparameters, centralized (no magic numbers in code).
+  forecast:
+    n_estimators: 300
+    learning_rate: 0.05
+    num_leaves: 31
+    min_child_samples: 15
+  nowcast:
+    n_estimators: 100
+    learning_rate: 0.05
+  promotion:
+    # A newly trained model is only promoted to @champion if its out-of-sample
+    # holdout MAE is <= the incumbent champion's by at least this margin.
+    metric: "holdout_mae"
+    min_improvement: 0.0
+
+features:
+  daily:
+    - Volume_Lag1
+    - Volume_LagDelta1
+    - Volume_Lag7
+    - Volume_LagDelta7
+    - Sin_DayOfWeek
+    - Cos_DayOfWeek
+    - Sin_WeekOfYear
+    - Cos_WeekOfYear
+    - Regime_0
+    - Regime_1
+    - Regime_2
+  hourly:
+    - Volume_Lag1
+    - Volume_LagDelta1
+    - Volume_Lag6
+    - Volume_LagDelta6
+    - Volume_Lag12
+    - Volume_LagDelta12
+    - Volume_Lag24
+    - Volume_LagDelta24
+    - Sin_Hour
+    - Cos_Hour
+    - Regime_0
+    - Regime_1
+    - Regime_2
+
+database:
+  crm_replica:
+    host: "${CRM_DB_HOST}"
+    port: 5432
+    database: "${CRM_DB_NAME}"
+    username: "${CRM_DB_USER}"
+    password: "${CRM_DB_PASSWORD}"
+    query: "SELECT tpep_pickup_datetime FROM yellow_taxi_trips"
+  staging:
+    host: "${STAGING_DB_HOST}"
+    port: 5432
+    database: "${STAGING_DB_NAME}"
+    username: "${STAGING_DB_USER}"
+    password: "${STAGING_DB_PASSWORD}"
