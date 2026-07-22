@@ -1,0 +1,40 @@
+# GPU scheduling priority — who wins when every accelerator is busy.
+#
+# The whole point: online serving must be able to EVICT a fine-tuning job to
+# reclaim a GPU, while batch inference sits between them. preemptionPolicy is
+# PreemptLowerPriority for serving (it may evict), and Never for training (it
+# waits for idle capacity, never displaces anything).
+#
+# See docs/platform/GPU_DESIGN.md §2.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: platform-online-serving
+value: 1000000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: >-
+  Latency-critical online inference (vLLM, embeddings). May preempt batch and
+  training pods to reclaim a GPU. Highest non-system priority.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: platform-batch-inference
+value: 100000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: >-
+  Offline / batch scoring jobs. May preempt training, yields to online serving.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: platform-training
+value: 10000
+globalDefault: false
+# Never preempts: fine-tuning soaks up idle GPUs but must not starve production.
+preemptionPolicy: Never
+description: >-
+  Fine-tuning / LoRA / distributed training. Runs on idle capacity and is the
+  first to be evicted when serving needs the GPU. Checkpoint frequently.

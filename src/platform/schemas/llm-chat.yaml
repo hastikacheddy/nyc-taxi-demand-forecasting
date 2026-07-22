@@ -1,0 +1,24 @@
+# A GPU LLM workload — the SAME spec shape as taxi-forecast.yaml, but the platform
+# schedules it on the GPU pool and serves it via vLLM. This is the whole point of
+# the abstraction: one declarative interface, opposite compute profiles.
+name: ops-copilot-llm
+type: llm
+runtime: vllm
+artifact_uri: "http://vllm.mlops.svc:8000/v1"
+
+resources:
+  gpu: 1
+  gpu_type: nvidia-a100
+  cpu: "4"
+  memory: 24Gi
+
+scaling:
+  min: 1
+  max: 4
+
+rollout:
+  canary_selector: null
+  canary_traffic: 0
+
+tags:
+  served_model_name: ops-copilot

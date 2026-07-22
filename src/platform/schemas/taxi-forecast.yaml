@@ -1,0 +1,18 @@
+# A CPU ML-model workload — the taxi demand forecaster as a platform workload.
+# Apply with:  POST /v1/workloads  (YAML body)  or  WorkloadManager.apply(spec)
+name: taxi-forecast
+type: ml-model
+runtime: lightgbm
+artifact_uri: "models:/TaxiDemand_Daily_Forecast@champion"
+
+resources:
+  cpu: "4"
+  memory: 8Gi
+  # no gpu → the platform schedules this on the CPU pool
+
+scaling:
+  min: 2
+  max: 10
+
+tags:
+  granularity: D

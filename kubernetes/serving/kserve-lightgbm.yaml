@@ -1,0 +1,43 @@
+# KServe InferenceService — the LightGBM demand forecaster on the CPU pool.
+#
+# Same control-plane shape as the LLM (canary, autoscaling, versioned model URI)
+# but on cheap CPU nodes: this is the point of the platform abstraction — one
+# deployment model, two radically different cost/latency profiles. Contrast the
+# resources and node placement with kserve-llm-vllm.yaml.
+#
+# The model artifact is pulled from object storage (MinIO/S3/Blob) by its
+# storageUri; KServe's sklearn/mlserver runtime serves the pyfunc model that the
+# existing training pipeline logs to MLflow.
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: taxi-demand-daily
+  namespace: mlops
+  annotations:
+    autoscaling.knative.dev/metric: concurrency
+    autoscaling.knative.dev/target: "50"     # trees are cheap; pack more per replica
+spec:
+  predictor:
+    minReplicas: 2                            # no scale-to-zero: always-on capacity plan
+    maxReplicas: 6
+    scaleMetric: concurrency
+    scaleTarget: 50
+    canaryTrafficPercent: 20                  # 20% to a challenger before full cutover
+
+    # Explicitly NOT on the GPU pool. No toleration → the taint keeps it on CPU.
+    priorityClassName: platform-online-serving
+
+    model:
+      modelFormat:
+        name: sklearn                         # pyfunc/sklearn-compatible flavor
+      # Versioned artifact in object storage. Swap the tag to roll versions;
+      # rollback = re-point to the previous URI (see RELIABILITY.md).
+      storageUri: "s3://mlops-models/taxi-demand-daily/v3"
+      resources:
+        requests:
+          cpu: "250m"
+          memory: 512Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+    # No nodeSelector / tolerations: default (CPU) pool by construction.

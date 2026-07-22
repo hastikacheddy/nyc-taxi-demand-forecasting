@@ -1,0 +1,46 @@
+[
+  {
+    "label": "Vanilla HF (mock)",
+    "n_requests": 200,
+    "concurrency": 16,
+    "errors": 0,
+    "wall_time_s": 18.6892,
+    "throughput_rps": 10.7,
+    "latency_ms": {
+      "p50": 186.82,
+      "p95": 17750.06,
+      "p99": 18496.72,
+      "mean": 1442.38,
+      "max": 18685.77
+    },
+    "cold_start_ms": 186.78,
+    "gpu": {
+      "available": false,
+      "util_mean_pct": null,
+      "util_max_pct": null,
+      "mem_used_mb_max": null
+    }
+  },
+  {
+    "label": "vLLM (mock)",
+    "n_requests": 200,
+    "concurrency": 16,
+    "errors": 0,
+    "wall_time_s": 0.8735,
+    "throughput_rps": 228.97,
+    "latency_ms": {
+      "p50": 66.86,
+      "p95": 67.11,
+      "p99": 67.23,
+      "mean": 66.84,
+      "max": 67.27
+    },
+    "cold_start_ms": 66.75,
+    "gpu": {
+      "available": false,
+      "util_mean_pct": null,
+      "util_max_pct": null,
+      "mem_used_mb_max": null
+    }
+  }
+]

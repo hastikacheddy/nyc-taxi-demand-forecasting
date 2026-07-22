@@ -16,7 +16,10 @@ uvicorn==0.34.0
 httpx==0.27.0
 sqlalchemy==1.4.51
 psycopg2-binary==2.9.10
-feast==0.40.0
+# Bumped from 0.40.0: that release capped protobuf<5, which conflicts with newer
+# opentelemetry-proto (protobuf>=5) pulled in transitively by mlflow — the cap was
+# lifted in later feast, resolving the CI dependency conflict.
+feast==0.49.0
 evidently==0.7.21
 slowapi==0.1.9
 arch==8.0.0

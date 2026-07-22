@@ -29,6 +29,7 @@ data/shadow_log/
 data/drift_reports/
 data/reference/
 data/features/
+data/checkpoints/          # distributed-training checkpoints (runtime artifacts)
 
 # ML artifacts
 *.joblib
@@ -40,6 +41,16 @@ feature_repo/data/
 # Notebooks checkpoints
 .ipynb_checkpoints/
 Notebook/.ipynb_checkpoints/
+
+# Terraform — never commit the provider cache (200MB+), state, or platform lock
+**/.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfvars
+!*.tfvars.example
 
 # Coverage
 .coverage

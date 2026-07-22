@@ -1,0 +1,86 @@
+# KServe InferenceService — an LLM served by vLLM on the GPU pool.
+#
+# This is the concrete, cluster-side actuation of what src/platform/ models in
+# process: a GPU-backed deployment with canary traffic, autoscaling on
+# concurrency, and scale-to-zero. The platform's VLLMBackend talks to the
+# OpenAI-compatible endpoint this exposes.
+#
+# Prereqs: KServe + Knative + a GPU node pool (taint nvidia.com/gpu=present,
+# label accelerator=nvidia-a100), NVIDIA device plugin, and the priority classes
+# in gpu-priorityclasses.yaml. See docs/platform/GPU_DESIGN.md.
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: risk-copilot-llm
+  namespace: mlops
+  annotations:
+    # Autoscale on in-flight requests, not CPU% — a saturated A100 can sit at
+    # low CPU while its queue grows. "10" = target 10 concurrent reqs per replica.
+    autoscaling.knative.dev/class: kpa.autoscaling.knative.dev
+    autoscaling.knative.dev/metric: concurrency
+    autoscaling.knative.dev/target: "10"
+spec:
+  predictor:
+    # minReplicas 1 for a latency-critical model: pay one warm A100 to avoid the
+    # 30–120s cold start of loading weights + CUDA context. Dev endpoints set 0.
+    minReplicas: 1
+    maxReplicas: 4
+    scaleTarget: 10
+    scaleMetric: concurrency
+
+    # Route only 10% of traffic to a newly rolled revision (canary). KServe
+    # shifts the rest automatically once it's healthy; this mirrors the
+    # stable/canary split DeploymentManager does in-process.
+    canaryTrafficPercent: 10
+
+    # Land only on A100 nodes and tolerate the GPU taint.
+    nodeSelector:
+      accelerator: nvidia-a100
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Equal
+        value: present
+        effect: NoSchedule
+    priorityClassName: platform-online-serving
+
+    containers:
+      - name: kserve-container
+        image: vllm/vllm-openai:v0.6.3
+        args:
+          - "--model=mistralai/Mistral-7B-Instruct-v0.3"
+          - "--served-model-name=risk-copilot"
+          - "--max-model-len=8192"
+          # Leave HBM headroom so a traffic spike doesn't trigger CUDA OOM.
+          - "--gpu-memory-utilization=0.90"
+          # Multi-GPU models set this to shard across the pool:
+          # - "--tensor-parallel-size=2"
+        ports:
+          - containerPort: 8000
+            protocol: TCP
+        env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: mlops-hf-secrets
+                key: hf_token
+        resources:
+          requests:
+            cpu: "4"
+            memory: 24Gi
+            nvidia.com/gpu: "1"
+          limits:
+            cpu: "8"
+            memory: 32Gi
+            nvidia.com/gpu: "1"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 60      # weights + CUDA warmup
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 120
+          periodSeconds: 20
