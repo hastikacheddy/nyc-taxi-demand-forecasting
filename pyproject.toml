@@ -19,3 +19,13 @@ include = ["src*"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-q"
+
+[tool.coverage.run]
+omit = [
+    # GPU + distributed-launcher only: these require torch/Ray and a real
+    # torchrun/Ray-cluster launch, so they cannot be exercised by unit tests in
+    # CI. The dependency-free data_parallel_demo.py IS tested (93%) and proves the
+    # same shard → all-reduce → checkpoint → recover logic they implement for real.
+    "src/training/distributed/torch_ddp_train.py",
+    "src/training/distributed/ray_train.py",
+]

@@ -1,0 +1,33 @@
+# Multi-tenancy guardrail: cap how many GPUs one team's namespace may hold.
+#
+# Without this, the first team to deploy a greedy vLLM config can consume the
+# whole GPU pool and starve everyone else. The quota makes accelerator capacity
+# an explicitly allocated, auditable resource per tenant.
+#
+# See docs/platform/GPU_DESIGN.md §2 and RELIABILITY.md (blast-radius isolation).
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: gpu-quota
+  namespace: mlops
+spec:
+  hard:
+    # At most 4 GPUs across all pods in this namespace at once.
+    requests.nvidia.com/gpu: "4"
+    limits.nvidia.com/gpu: "4"
+---
+# LimitRange stops a single pod from requesting an absurd amount and makes the
+# GPU request explicit (a pod with no GPU request never lands on the GPU pool,
+# but this documents the expected shape for those that do).
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: gpu-limits
+  namespace: mlops
+spec:
+  limits:
+    - type: Container
+      max:
+        nvidia.com/gpu: "2"     # no single container grabs more than 2 GPUs
+      min:
+        nvidia.com/gpu: "0"
